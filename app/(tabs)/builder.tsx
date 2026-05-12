@@ -3,24 +3,20 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   View, Text, TextInput, Pressable, ScrollView,
   StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator,
-  Animated, Modal,
+  Animated, Modal, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Colors, Spacing, FontSize, FontWeight, Radius, Shadow } from '@/constants/theme';
-import { getSupabaseClient } from '@/template';
-import { useAuth } from '@/template';
+import { getSupabaseClient, useAuth } from '@/template';
+import {
+  loadProjects, saveProject, renameProject, deleteProject,
+  BuilderProject, BuilderProjectMessage,
+} from '@/services/builderService';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 type BuilderMode = 'plan' | 'code' | 'debug' | 'review';
-
-interface BuildStep {
-  id: string;
-  title: string;
-  description: string;
-  done: boolean;
-}
 
 interface BuilderMessage {
   id: string;
@@ -33,21 +29,21 @@ interface BuilderMessage {
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
 const BUILDER_MODES: { key: BuilderMode; label: string; icon: any; color: string; desc: string }[] = [
-  { key: 'plan',   label: 'App Plan',   icon: 'architecture',     color: '#FFD700', desc: 'Get a full build plan, features & tech stack' },
-  { key: 'code',   label: 'Write Code', icon: 'code',             color: '#22C55E', desc: 'Generate screens, components & logic' },
-  { key: 'debug',  label: 'Debug',      icon: 'bug-report',       color: '#EF4444', desc: 'Fix errors, crashes & unexpected behavior' },
-  { key: 'review', label: 'Review',     icon: 'rate-review',      color: '#3B82F6', desc: 'Improve your existing code quality' },
+  { key: 'plan',   label: 'App Plan',   icon: 'architecture',   color: '#FFD700', desc: 'Get a full build plan, features & tech stack' },
+  { key: 'code',   label: 'Write Code', icon: 'code',           color: '#22C55E', desc: 'Generate screens, components & logic' },
+  { key: 'debug',  label: 'Debug',      icon: 'bug-report',     color: '#EF4444', desc: 'Fix errors, crashes & unexpected behavior' },
+  { key: 'review', label: 'Review',     icon: 'rate-review',    color: '#3B82F6', desc: 'Improve your existing code quality' },
 ];
 
 const QUICK_TEMPLATES = [
-  { emoji: '📱', label: 'Social App',     prompt: 'Build me a social media app like Instagram with posts, likes, and a feed. Use React Native + Supabase. Give me the full plan.' },
-  { emoji: '💰', label: 'Finance App',    prompt: 'Build a personal finance tracker app with income/expense tracking, charts, and monthly summaries. React Native + Supabase.' },
-  { emoji: '🏋️', label: 'Fitness App',   prompt: 'Build a workout tracking app where users can log exercises, track progress, and see weekly stats. React Native + Expo.' },
-  { emoji: '🛒', label: 'E-Commerce',    prompt: 'Build an e-commerce app with product listings, cart, and checkout. React Native + Stripe + Supabase.' },
-  { emoji: '💬', label: 'Chat App',       prompt: 'Build a real-time chat app with direct messages and group chats. React Native + Supabase real-time.' },
-  { emoji: '📚', label: 'Learning App',  prompt: 'Build a learning/education app with courses, lessons, quizzes, and progress tracking. React Native + Supabase.' },
-  { emoji: '🎵', label: 'Music Player',  prompt: 'Build a music player app with playlists, playback controls, and album art. React Native + expo-av.' },
-  { emoji: '📍', label: 'Location App',  prompt: 'Build a location-based app where users can share and discover nearby places. React Native + react-native-maps.' },
+  { emoji: '📱', label: 'Social App',    prompt: 'Build me a social media app like Instagram with posts, likes, and a feed. Use React Native + Supabase. Give me the full plan.' },
+  { emoji: '💰', label: 'Finance App',   prompt: 'Build a personal finance tracker app with income/expense tracking, charts, and monthly summaries. React Native + Supabase.' },
+  { emoji: '🏋️', label: 'Fitness App',  prompt: 'Build a workout tracking app where users can log exercises, track progress, and see weekly stats. React Native + Expo.' },
+  { emoji: '🛒', label: 'E-Commerce',   prompt: 'Build an e-commerce app with product listings, cart, and checkout. React Native + Stripe + Supabase.' },
+  { emoji: '💬', label: 'Chat App',      prompt: 'Build a real-time chat app with direct messages and group chats. React Native + Supabase real-time.' },
+  { emoji: '📚', label: 'Learning App', prompt: 'Build a learning/education app with courses, lessons, quizzes, and progress tracking. React Native + Supabase.' },
+  { emoji: '🎵', label: 'Music Player', prompt: 'Build a music player app with playlists, playback controls, and album art. React Native + expo-av.' },
+  { emoji: '📍', label: 'Location App', prompt: 'Build a location-based app where users can share and discover nearby places. React Native + react-native-maps.' },
 ];
 
 const MODE_PROMPTS: Record<BuilderMode, string> = {
@@ -77,12 +73,7 @@ async function streamBuilderResponse(
       'apikey': anonKey ?? '',
       'Authorization': `Bearer ${token ?? anonKey ?? ''}`,
     },
-    body: JSON.stringify({
-      messages,
-      language: 'en',
-      model: 'openai/gpt-5.1',
-      builderMode: true,
-    }),
+    body: JSON.stringify({ messages, language: 'en', model: 'openai/gpt-5.1', builderMode: true }),
     signal,
   });
 
@@ -155,10 +146,82 @@ function BuilderBubble({ msg }: { msg: BuilderMessage }) {
       <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAI]}>
         <Text style={[styles.bubbleText, isUser && styles.bubbleTextUser]}>
           {msg.text}
-          {msg.isStreaming && <BlinkingCursor />}
+          {msg.isStreaming ? <BlinkingCursor /> : null}
         </Text>
       </View>
     </View>
+  );
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function timeAgo(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+function extractDescription(messages: BuilderProjectMessage[]): string {
+  const first = messages.find((m) => m.role === 'user');
+  if (!first) return '';
+  return first.text.length > 80 ? first.text.slice(0, 80) + '...' : first.text;
+}
+
+// ─── Project List Item ────────────────────────────────────────────────────────
+
+function ProjectItem({
+  project,
+  onOpen,
+  onRename,
+  onDelete,
+}: {
+  project: BuilderProject;
+  onOpen: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+}) {
+  const modeInfo = BUILDER_MODES.find((m) => m.key === project.mode) ?? BUILDER_MODES[0];
+  const msgCount = project.messages.length;
+  const desc = extractDescription(project.messages);
+
+  return (
+    <Pressable
+      onPress={onOpen}
+      style={({ pressed }) => [styles.projectItem, pressed && { opacity: 0.85 }]}
+    >
+      {/* Mode badge */}
+      <View style={[styles.projectModeIcon, { backgroundColor: `${modeInfo.color}18` }]}>
+        <MaterialIcons name={modeInfo.icon} size={18} color={modeInfo.color} />
+      </View>
+
+      <View style={{ flex: 1, gap: 4 }}>
+        <Text style={styles.projectTitle} numberOfLines={1}>{project.title}</Text>
+        {desc ? (
+          <Text style={styles.projectDesc} numberOfLines={2}>{desc}</Text>
+        ) : null}
+        <View style={styles.projectMeta}>
+          <View style={[styles.projectModePill, { borderColor: `${modeInfo.color}40` }]}>
+            <Text style={[styles.projectModeText, { color: modeInfo.color }]}>{modeInfo.label}</Text>
+          </View>
+          <Text style={styles.projectMetaText}>{msgCount} msgs</Text>
+          <Text style={styles.projectMetaText}>·</Text>
+          <Text style={styles.projectMetaText}>{timeAgo(project.updated_at)}</Text>
+        </View>
+      </View>
+
+      <View style={styles.projectActions}>
+        <Pressable onPress={onRename} hitSlop={8} style={({ pressed }) => [styles.projectActionBtn, pressed && { opacity: 0.6 }]}>
+          <MaterialIcons name="edit" size={16} color={Colors.textMuted} />
+        </Pressable>
+        <Pressable onPress={onDelete} hitSlop={8} style={({ pressed }) => [styles.projectActionBtn, pressed && { opacity: 0.6 }]}>
+          <MaterialIcons name="delete-outline" size={16} color={Colors.danger} />
+        </Pressable>
+      </View>
+    </Pressable>
   );
 }
 
@@ -172,6 +235,20 @@ export default function BuilderScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [showClearModal, setShowClearModal] = useState(false);
   const [showTemplates, setShowTemplates] = useState(true);
+
+  // Projects state
+  const [showProjects, setShowProjects] = useState(false);
+  const [projects, setProjects] = useState<BuilderProject[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState(false);
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
+  const [currentProjectTitle, setCurrentProjectTitle] = useState('');
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [saveTitle, setSaveTitle] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [showRenameModal, setShowRenameModal] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<BuilderProject | null>(null);
+  const [renameText, setRenameText] = useState('');
+
   const scrollRef = useRef<ScrollView>(null);
   const abortRef = useRef<AbortController | null>(null);
   const historyRef = useRef<{ role: string; content: string }[]>([]);
@@ -192,7 +269,7 @@ ${activeMode === 'code' ? '→ Write complete, copy-paste-ready code. Always inc
 ${activeMode === 'debug' ? '→ Identify the root cause precisely. Give the exact fix. Explain WHY it happened.' : ''}
 ${activeMode === 'review' ? '→ Rate code quality, find bugs/performance issues, suggest specific improvements with code examples.' : ''}
 
-## Tech Stack You Use:
+## Tech Stack:
 - React Native + Expo + TypeScript + Expo Router
 - Supabase (auth, database, storage, edge functions)
 - OnSpace AI (text, image, voice generation)
@@ -204,19 +281,137 @@ ${activeMode === 'review' ? '→ Rate code quality, find bugs/performance issues
 - Code blocks with language identifier (typescript, sql, bash)
 - Numbered steps for sequences
 - Be direct — no filler text
-- Always provide COMPLETE, RUNNABLE code
-
-You are the most powerful app building AI Yonas has. Every response should make him feel like he can build anything.`;
+- Always provide COMPLETE, RUNNABLE code`;
 
   const scrollToBottom = useCallback(() => {
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
   }, []);
 
+  // ── Load projects ────────────────────────────────────────────────────────
+  const fetchProjects = useCallback(async () => {
+    if (!user?.id) return;
+    setProjectsLoading(true);
+    try {
+      const data = await loadProjects(user.id);
+      setProjects(data);
+    } catch {
+      // silent
+    } finally {
+      setProjectsLoading(false);
+    }
+  }, [user?.id]);
+
+  // ── Save / Update project ─────────────────────────────────────────────────
+  const handleSave = useCallback(async () => {
+    if (!user?.id || messages.length === 0) return;
+    const title = saveTitle.trim() || 'Untitled Project';
+    setIsSaving(true);
+    try {
+      const projectMsgs: BuilderProjectMessage[] = messages.map((m) => ({
+        id: m.id,
+        role: m.role,
+        text: m.text,
+        timestamp: m.timestamp.toISOString(),
+      }));
+      const saved = await saveProject(user.id, title, activeMode, projectMsgs, undefined, currentProjectId ?? undefined);
+      setCurrentProjectId(saved.id);
+      setCurrentProjectTitle(saved.title);
+      setShowSaveModal(false);
+      setSaveTitle('');
+      // Refresh list if open
+      if (showProjects) fetchProjects();
+    } catch {
+      Alert.alert('Save failed', 'Could not save project. Try again.');
+    } finally {
+      setIsSaving(false);
+    }
+  }, [user?.id, messages, saveTitle, activeMode, currentProjectId, showProjects]);
+
+  // Quick auto-save (update existing project without modal)
+  const handleAutoSave = useCallback(async () => {
+    if (!user?.id || !currentProjectId || messages.length === 0) return;
+    try {
+      const projectMsgs: BuilderProjectMessage[] = messages.map((m) => ({
+        id: m.id,
+        role: m.role,
+        text: m.text,
+        timestamp: m.timestamp.toISOString(),
+      }));
+      await saveProject(user.id, currentProjectTitle, activeMode, projectMsgs, undefined, currentProjectId);
+    } catch {}
+  }, [user?.id, currentProjectId, currentProjectTitle, activeMode, messages]);
+
+  // ── Open project ──────────────────────────────────────────────────────────
+  const handleOpenProject = useCallback((project: BuilderProject) => {
+    abortRef.current?.abort();
+    const msgs: BuilderMessage[] = project.messages.map((m) => ({
+      id: m.id,
+      role: m.role,
+      text: m.text,
+      timestamp: new Date(m.timestamp),
+      isStreaming: false,
+    }));
+    historyRef.current = project.messages.map((m) => ({ role: m.role, content: m.text }));
+    setMessages(msgs);
+    setActiveMode((project.mode as BuilderMode) ?? 'plan');
+    setCurrentProjectId(project.id);
+    setCurrentProjectTitle(project.title);
+    setShowTemplates(false);
+    setIsLoading(false);
+    setShowProjects(false);
+    scrollToBottom();
+  }, [scrollToBottom]);
+
+  // ── Delete project ────────────────────────────────────────────────────────
+  const handleDeleteProject = useCallback((project: BuilderProject) => {
+    Alert.alert(
+      'Delete Project',
+      `Delete "${project.title}"? This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            if (!user?.id) return;
+            try {
+              await deleteProject(project.id, user.id);
+              setProjects((p) => p.filter((x) => x.id !== project.id));
+              if (currentProjectId === project.id) {
+                setCurrentProjectId(null);
+                setCurrentProjectTitle('');
+              }
+            } catch {
+              Alert.alert('Error', 'Could not delete project.');
+            }
+          },
+        },
+      ]
+    );
+  }, [user?.id, currentProjectId]);
+
+  // ── Rename project ────────────────────────────────────────────────────────
+  const handleRenameConfirm = useCallback(async () => {
+    if (!user?.id || !renameTarget) return;
+    const newTitle = renameText.trim();
+    if (!newTitle) return;
+    try {
+      await renameProject(renameTarget.id, user.id, newTitle);
+      setProjects((p) => p.map((x) => x.id === renameTarget.id ? { ...x, title: newTitle } : x));
+      if (currentProjectId === renameTarget.id) setCurrentProjectTitle(newTitle);
+      setShowRenameModal(false);
+      setRenameTarget(null);
+      setRenameText('');
+    } catch {
+      Alert.alert('Error', 'Could not rename project.');
+    }
+  }, [user?.id, renameTarget, renameText, currentProjectId]);
+
+  // ── Send message ──────────────────────────────────────────────────────────
   const sendMessage = useCallback(async (text: string) => {
     if (!text.trim() || isLoading) return;
     abortRef.current?.abort();
     abortRef.current = new AbortController();
-
     setShowTemplates(false);
 
     const userMsg: BuilderMessage = {
@@ -225,11 +420,8 @@ You are the most powerful app building AI Yonas has. Every response should make 
       text: text.trim(),
       timestamp: new Date(),
     };
-
-    // Build message with system context
     const systemMsg = { role: 'system', content: BUILDER_SYSTEM };
     historyRef.current = [...historyRef.current, { role: 'user', content: text.trim() }];
-
     setMessages((prev) => [...prev, userMsg]);
     setInputText('');
     setIsLoading(true);
@@ -250,9 +442,7 @@ You are the most powerful app building AI Yonas has. Every response should make 
         [systemMsg, ...historyRef.current.slice(-20)],
         (chunk) => {
           acc += chunk;
-          setMessages((prev) =>
-            prev.map((m) => m.id === streamId ? { ...m, text: acc, isStreaming: true } : m)
-          );
+          setMessages((prev) => prev.map((m) => m.id === streamId ? { ...m, text: acc, isStreaming: true } : m));
           scrollToBottom();
         },
         abortRef.current.signal
@@ -260,18 +450,12 @@ You are the most powerful app building AI Yonas has. Every response should make 
 
       const final = acc || 'No response received. Try again.';
       historyRef.current = [...historyRef.current, { role: 'assistant', content: final }];
-      setMessages((prev) =>
-        prev.map((m) => m.id === streamId ? { ...m, text: final, isStreaming: false } : m)
-      );
+      setMessages((prev) => prev.map((m) => m.id === streamId ? { ...m, text: final, isStreaming: false } : m));
     } catch (err: any) {
       if (err?.name === 'AbortError') return;
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === streamId
-            ? { ...m, text: 'Connection issue. Check your internet and try again.', isStreaming: false }
-            : m
-        )
-      );
+      setMessages((prev) => prev.map((m) =>
+        m.id === streamId ? { ...m, text: 'Connection issue. Check your internet and try again.', isStreaming: false } : m
+      ));
     } finally {
       setIsLoading(false);
       scrollToBottom();
@@ -280,9 +464,7 @@ You are the most powerful app building AI Yonas has. Every response should make 
 
   const handleModeSwitch = (mode: BuilderMode) => {
     setActiveMode(mode);
-    // Inject a context switch message into history
-    const switchNote = `[Mode switched to: ${mode.toUpperCase()}]`;
-    historyRef.current = [...historyRef.current, { role: 'system', content: switchNote }];
+    historyRef.current = [...historyRef.current, { role: 'system', content: `[Mode switched to: ${mode.toUpperCase()}]` }];
   };
 
   const handleClear = () => {
@@ -293,6 +475,16 @@ You are the most powerful app building AI Yonas has. Every response should make 
     setIsLoading(false);
     setShowTemplates(true);
     setShowClearModal(false);
+    setCurrentProjectId(null);
+    setCurrentProjectTitle('');
+  };
+
+  const openSaveModal = () => {
+    // Pre-fill title from first user message
+    const firstUser = messages.find((m) => m.role === 'user');
+    const auto = firstUser ? firstUser.text.slice(0, 40) : '';
+    setSaveTitle(currentProjectTitle || auto);
+    setShowSaveModal(true);
   };
 
   return (
@@ -304,21 +496,50 @@ You are the most powerful app building AI Yonas has. Every response should make 
             <MaterialIcons name="developer-mode" size={20} color={Colors.primary} />
           </View>
           <View>
-            <Text style={styles.headerTitle}>App Builder</Text>
-            <Text style={styles.headerSub}>GPT-5.1 · React Native Expert</Text>
+            <Text style={styles.headerTitle}>
+              {currentProjectTitle ? currentProjectTitle : 'App Builder'}
+            </Text>
+            <Text style={styles.headerSub}>
+              {currentProjectId ? '● Saved Project' : 'GPT-5.1 · React Native Expert'}
+            </Text>
           </View>
         </View>
-        <Pressable
-          onPress={() => messages.length > 0 && setShowClearModal(true)}
-          hitSlop={8}
-          style={({ pressed }) => [styles.clearBtn, pressed && { opacity: 0.6 }]}
-        >
-          <MaterialIcons
-            name="refresh"
-            size={20}
-            color={messages.length > 0 ? Colors.textSecondary : Colors.textMuted}
-          />
-        </Pressable>
+
+        <View style={styles.headerRight}>
+          {/* Save button — visible when there are messages */}
+          {messages.length > 0 ? (
+            <Pressable
+              onPress={currentProjectId ? handleAutoSave : openSaveModal}
+              hitSlop={8}
+              style={({ pressed }) => [styles.headerBtn, styles.headerBtnGold, pressed && { opacity: 0.7 }]}
+            >
+              <MaterialIcons name={currentProjectId ? 'cloud-done' : 'save'} size={17} color={Colors.textInverse} />
+              <Text style={styles.headerBtnGoldText}>{currentProjectId ? 'Saved' : 'Save'}</Text>
+            </Pressable>
+          ) : null}
+
+          {/* Projects button */}
+          <Pressable
+            onPress={() => { fetchProjects(); setShowProjects(true); }}
+            hitSlop={8}
+            style={({ pressed }) => [styles.headerBtn, pressed && { opacity: 0.6 }]}
+          >
+            <MaterialIcons name="folder-open" size={19} color={Colors.textSecondary} />
+          </Pressable>
+
+          {/* Clear button */}
+          <Pressable
+            onPress={() => messages.length > 0 && setShowClearModal(true)}
+            hitSlop={8}
+            style={({ pressed }) => [styles.headerBtn, pressed && { opacity: 0.6 }]}
+          >
+            <MaterialIcons
+              name="refresh"
+              size={19}
+              color={messages.length > 0 ? Colors.textSecondary : Colors.textMuted}
+            />
+          </Pressable>
+        </View>
       </View>
 
       {/* Mode Selector */}
@@ -357,9 +578,8 @@ You are the most powerful app building AI Yonas has. Every response should make 
           keyboardShouldPersistTaps="handled"
         >
           {/* Empty State / Templates */}
-          {showTemplates && messages.length === 0 && (
+          {showTemplates && messages.length === 0 ? (
             <View style={styles.emptyState}>
-              {/* Hero */}
               <View style={styles.heroCard}>
                 <View style={styles.heroIconWrap}>
                   <MaterialIcons name="developer-mode" size={36} color={Colors.primary} />
@@ -368,9 +588,16 @@ You are the most powerful app building AI Yonas has. Every response should make 
                 <Text style={styles.heroSub}>
                   Describe your idea — get a full plan, code, and launch strategy. Powered by GPT-5.1.
                 </Text>
+                {/* Projects shortcut in empty state */}
+                <Pressable
+                  onPress={() => { fetchProjects(); setShowProjects(true); }}
+                  style={({ pressed }) => [styles.openProjectsBtn, pressed && { opacity: 0.7 }]}
+                >
+                  <MaterialIcons name="folder-open" size={16} color={Colors.primary} />
+                  <Text style={styles.openProjectsBtnText}>Open a saved project</Text>
+                </Pressable>
               </View>
 
-              {/* Mode info */}
               <View style={styles.modeInfoCard}>
                 {(() => {
                   const m = BUILDER_MODES.find((x) => x.key === activeMode)!;
@@ -386,7 +613,6 @@ You are the most powerful app building AI Yonas has. Every response should make 
                 })()}
               </View>
 
-              {/* Quick templates */}
               <Text style={styles.templateLabel}>📦 Quick Start Templates</Text>
               <View style={styles.templateGrid}>
                 {QUICK_TEMPLATES.map((t, i) => (
@@ -401,7 +627,6 @@ You are the most powerful app building AI Yonas has. Every response should make 
                 ))}
               </View>
 
-              {/* Custom idea prompt */}
               <View style={styles.customIdeaCard}>
                 <MaterialIcons name="lightbulb-outline" size={18} color={Colors.warning} />
                 <Text style={styles.customIdeaText}>
@@ -409,15 +634,14 @@ You are the most powerful app building AI Yonas has. Every response should make 
                 </Text>
               </View>
             </View>
-          )}
+          ) : null}
 
           {/* Messages */}
           {messages.map((msg) => (
             <BuilderBubble key={msg.id} msg={msg} />
           ))}
 
-          {/* Loading dots */}
-          {isLoading && messages[messages.length - 1]?.role !== 'assistant' && (
+          {isLoading && messages[messages.length - 1]?.role !== 'assistant' ? (
             <View style={styles.bubbleWrap}>
               <View style={styles.bubbleAvatar}>
                 <MaterialIcons name="code" size={14} color={Colors.primary} />
@@ -427,12 +651,11 @@ You are the most powerful app building AI Yonas has. Every response should make 
                 <Text style={styles.loadingText}>Building response...</Text>
               </View>
             </View>
-          )}
+          ) : null}
         </ScrollView>
 
         {/* Input Area */}
         <View style={styles.inputArea}>
-          {/* Active mode indicator */}
           <View style={styles.activeModeBadge}>
             {(() => {
               const m = BUILDER_MODES.find((x) => x.key === activeMode)!;
@@ -443,6 +666,15 @@ You are the most powerful app building AI Yonas has. Every response should make 
                 </>
               );
             })()}
+            {currentProjectTitle ? (
+              <>
+                <Text style={styles.activeModeText}>·</Text>
+                <MaterialIcons name="folder" size={11} color={Colors.textMuted} />
+                <Text style={[styles.activeModeText, { color: Colors.textMuted }]} numberOfLines={1}>
+                  {currentProjectTitle}
+                </Text>
+              </>
+            ) : null}
           </View>
 
           <View style={styles.inputRow}>
@@ -476,7 +708,162 @@ You are the most powerful app building AI Yonas has. Every response should make 
         </View>
       </KeyboardAvoidingView>
 
-      {/* Clear Confirmation Modal */}
+      {/* ── PROJECTS MODAL ── */}
+      <Modal
+        visible={showProjects}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowProjects(false)}
+      >
+        <Pressable style={styles.sheetBackdrop} onPress={() => setShowProjects(false)}>
+          <Pressable style={styles.projectsSheet} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.sheetHandle} />
+            <View style={styles.projectsHeader}>
+              <View>
+                <Text style={styles.sheetTitle}>My Projects</Text>
+                <Text style={styles.sheetSub}>Saved app build sessions</Text>
+              </View>
+              {messages.length > 0 ? (
+                <Pressable
+                  onPress={() => { setShowProjects(false); openSaveModal(); }}
+                  style={({ pressed }) => [styles.newProjectBtn, pressed && { opacity: 0.7 }]}
+                >
+                  <MaterialIcons name="add" size={16} color={Colors.textInverse} />
+                  <Text style={styles.newProjectBtnText}>Save Current</Text>
+                </Pressable>
+              ) : null}
+            </View>
+
+            {projectsLoading ? (
+              <View style={styles.projectsLoading}>
+                <ActivityIndicator color={Colors.primary} />
+                <Text style={styles.projectsLoadingText}>Loading projects...</Text>
+              </View>
+            ) : projects.length === 0 ? (
+              <View style={styles.projectsEmpty}>
+                <MaterialIcons name="folder-open" size={48} color={Colors.textMuted} />
+                <Text style={styles.projectsEmptyTitle}>No saved projects yet</Text>
+                <Text style={styles.projectsEmptyDesc}>
+                  Start a conversation and hit Save to create your first project.
+                </Text>
+              </View>
+            ) : (
+              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: Spacing.sm, paddingBottom: 32 }}>
+                {projects.map((p) => (
+                  <ProjectItem
+                    key={p.id}
+                    project={p}
+                    onOpen={() => handleOpenProject(p)}
+                    onRename={() => {
+                      setRenameTarget(p);
+                      setRenameText(p.title);
+                      setShowRenameModal(true);
+                    }}
+                    onDelete={() => handleDeleteProject(p)}
+                  />
+                ))}
+              </ScrollView>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* ── SAVE MODAL ── */}
+      <Modal
+        visible={showSaveModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowSaveModal(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => !isSaving && setShowSaveModal(false)}>
+          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalIconWrap}>
+              <MaterialIcons name="save" size={26} color={Colors.primary} />
+            </View>
+            <Text style={styles.modalTitle}>Save Project</Text>
+            <Text style={styles.modalBody}>Give this build session a name so you can find it later.</Text>
+
+            <TextInput
+              style={styles.saveInput}
+              value={saveTitle}
+              onChangeText={setSaveTitle}
+              placeholder="e.g. Fitness Tracker App"
+              placeholderTextColor={Colors.textMuted}
+              maxLength={60}
+              autoFocus
+            />
+
+            <View style={styles.modalBtns}>
+              <Pressable
+                style={({ pressed }) => [styles.modalBtn, styles.modalBtnCancel, pressed && { opacity: 0.7 }]}
+                onPress={() => setShowSaveModal(false)}
+                disabled={isSaving}
+              >
+                <Text style={styles.modalBtnCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.modalBtn, styles.modalBtnConfirm, pressed && { opacity: 0.8 }]}
+                onPress={handleSave}
+                disabled={isSaving}
+              >
+                {isSaving ? (
+                  <ActivityIndicator size="small" color={Colors.textInverse} />
+                ) : (
+                  <>
+                    <MaterialIcons name="save" size={15} color={Colors.textInverse} />
+                    <Text style={styles.modalBtnConfirmText}>Save Project</Text>
+                  </>
+                )}
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* ── RENAME MODAL ── */}
+      <Modal
+        visible={showRenameModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowRenameModal(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setShowRenameModal(false)}>
+          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+            <View style={[styles.modalIconWrap, { backgroundColor: Colors.infoDim }]}>
+              <MaterialIcons name="edit" size={26} color={Colors.info} />
+            </View>
+            <Text style={styles.modalTitle}>Rename Project</Text>
+
+            <TextInput
+              style={styles.saveInput}
+              value={renameText}
+              onChangeText={setRenameText}
+              placeholder="Project name"
+              placeholderTextColor={Colors.textMuted}
+              maxLength={60}
+              autoFocus
+            />
+
+            <View style={styles.modalBtns}>
+              <Pressable
+                style={({ pressed }) => [styles.modalBtn, styles.modalBtnCancel, pressed && { opacity: 0.7 }]}
+                onPress={() => { setShowRenameModal(false); setRenameTarget(null); }}
+              >
+                <Text style={styles.modalBtnCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.modalBtn, { backgroundColor: Colors.info }, pressed && { opacity: 0.8 }]}
+                onPress={handleRenameConfirm}
+              >
+                <MaterialIcons name="check" size={15} color={Colors.textPrimary} />
+                <Text style={[styles.modalBtnConfirmText, { color: Colors.textPrimary }]}>Rename</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* ── CLEAR MODAL ── */}
       <Modal
         visible={showClearModal}
         transparent
@@ -485,13 +872,24 @@ You are the most powerful app building AI Yonas has. Every response should make 
       >
         <Pressable style={styles.modalBackdrop} onPress={() => setShowClearModal(false)}>
           <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
-            <View style={styles.modalIconWrap}>
+            <View style={[styles.modalIconWrap, { backgroundColor: Colors.warningDim }]}>
               <MaterialIcons name="refresh" size={26} color={Colors.warning} />
             </View>
             <Text style={styles.modalTitle}>Start New Session?</Text>
             <Text style={styles.modalBody}>
-              Your current build conversation will be cleared. Start fresh with a new app idea.
+              {currentProjectId
+                ? 'Your project is saved. Starting fresh clears the current conversation.'
+                : 'Your current conversation will be cleared. Save it first if you want to keep it.'}
             </Text>
+            {!currentProjectId && messages.length > 0 ? (
+              <Pressable
+                onPress={() => { setShowClearModal(false); openSaveModal(); }}
+                style={({ pressed }) => [styles.saveFirstBtn, pressed && { opacity: 0.7 }]}
+              >
+                <MaterialIcons name="save" size={14} color={Colors.primary} />
+                <Text style={styles.saveFirstBtnText}>Save first</Text>
+              </Pressable>
+            ) : null}
             <View style={styles.modalBtns}>
               <Pressable
                 style={({ pressed }) => [styles.modalBtn, styles.modalBtnCancel, pressed && { opacity: 0.7 }]}
@@ -528,59 +926,49 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: Colors.surfaceBorder,
   },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1, marginRight: 8 },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   headerIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 44, height: 44, borderRadius: 22,
     backgroundColor: Colors.primaryGlow,
     borderWidth: 1.5,
     borderColor: 'rgba(255,215,0,0.4)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: 'center', justifyContent: 'center',
+    flexShrink: 0,
   },
-  headerTitle: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  headerTitle: {
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+    flexShrink: 1,
+  },
   headerSub: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 2 },
-  clearBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+  headerBtn: {
+    width: 36, height: 36, borderRadius: 18,
     backgroundColor: Colors.surfaceElevated,
-    borderWidth: 1,
-    borderColor: Colors.surfaceBorder,
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderWidth: 1, borderColor: Colors.surfaceBorder,
+    alignItems: 'center', justifyContent: 'center',
   },
+  headerBtnGold: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    width: 'auto', paddingHorizontal: 12,
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  headerBtnGoldText: { fontSize: FontSize.xs, fontWeight: FontWeight.bold, color: Colors.textInverse },
 
   // Mode bar
-  modeBar: {
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.surfaceBorder,
-  },
-  modeScroll: {
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    gap: Spacing.sm,
-  },
+  modeBar: { borderBottomWidth: 1, borderBottomColor: Colors.surfaceBorder },
+  modeScroll: { paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm, gap: Spacing.sm },
   modeChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 14, paddingVertical: 9,
     borderRadius: Radius.full,
     backgroundColor: Colors.surfaceElevated,
-    borderWidth: 1.5,
-    borderColor: Colors.surfaceBorder,
+    borderWidth: 1.5, borderColor: Colors.surfaceBorder,
   },
-  modeChipActive: {
-    backgroundColor: 'rgba(255,215,0,0.07)',
-  },
-  modeLabel: {
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.semibold,
-    color: Colors.textMuted,
-  },
+  modeChipActive: { backgroundColor: 'rgba(255,215,0,0.07)' },
+  modeLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textMuted },
 
   // Messages
   messagesContent: { paddingBottom: 16 },
@@ -598,209 +986,194 @@ const styles = StyleSheet.create({
     ...Shadow.gold,
   },
   heroIconWrap: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
+    width: 68, height: 68, borderRadius: 34,
     backgroundColor: Colors.primaryGlow,
-    borderWidth: 2,
-    borderColor: 'rgba(255,215,0,0.35)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 4,
+    borderWidth: 2, borderColor: 'rgba(255,215,0,0.35)',
+    alignItems: 'center', justifyContent: 'center', marginBottom: 4,
   },
   heroTitle: {
-    fontSize: FontSize.xl,
-    fontWeight: FontWeight.bold,
-    color: Colors.textPrimary,
-    textAlign: 'center',
-    lineHeight: 30,
+    fontSize: FontSize.xl, fontWeight: FontWeight.bold,
+    color: Colors.textPrimary, textAlign: 'center', lineHeight: 30,
   },
-  heroSub: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    textAlign: 'center',
-    lineHeight: 21,
+  heroSub: { fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center', lineHeight: 21 },
+  openProjectsBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    marginTop: Spacing.sm,
+    backgroundColor: Colors.primaryGlow,
+    borderWidth: 1, borderColor: 'rgba(255,215,0,0.25)',
+    paddingHorizontal: 16, paddingVertical: 9,
+    borderRadius: Radius.full,
   },
+  openProjectsBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.primary },
 
   modeInfoCard: {
     backgroundColor: Colors.surface,
     borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.surfaceBorder,
-    padding: Spacing.md,
-    gap: 6,
+    borderWidth: 1, borderColor: Colors.surfaceBorder,
+    padding: Spacing.md, gap: 6,
   },
   modeInfoRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   modeInfoLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.bold },
   modeInfoDesc: { fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20 },
 
-  templateLabel: {
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.semibold,
-    color: Colors.textSecondary,
-    marginBottom: -4,
-  },
-  templateGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.sm,
-  },
+  templateLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textSecondary, marginBottom: -4 },
+  templateGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   templateChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
+    flexDirection: 'row', alignItems: 'center', gap: 6,
     backgroundColor: Colors.surfaceElevated,
-    borderWidth: 1,
-    borderColor: Colors.surfaceBorder,
-    borderRadius: Radius.full,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    borderWidth: 1, borderColor: Colors.surfaceBorder,
+    borderRadius: Radius.full, paddingHorizontal: 14, paddingVertical: 10,
   },
   templateEmoji: { fontSize: 16 },
   templateChipLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.textPrimary },
 
   customIdeaCard: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: Spacing.sm,
+    flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm,
     backgroundColor: Colors.warningDim,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: 'rgba(245,158,11,0.2)',
+    borderRadius: Radius.lg, borderWidth: 1, borderColor: 'rgba(245,158,11,0.2)',
     padding: Spacing.md,
   },
   customIdeaText: { flex: 1, fontSize: FontSize.sm, color: Colors.warning, lineHeight: 20 },
 
   // Bubbles
   bubbleWrap: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-    paddingHorizontal: Spacing.md,
-    paddingTop: Spacing.sm,
+    flexDirection: 'row', alignItems: 'flex-start', gap: 10,
+    paddingHorizontal: Spacing.md, paddingTop: Spacing.sm,
   },
   bubbleWrapUser: { flexDirection: 'row-reverse' },
   bubbleAvatar: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    width: 30, height: 30, borderRadius: 15,
     backgroundColor: Colors.primaryGlow,
-    borderWidth: 1,
-    borderColor: 'rgba(255,215,0,0.3)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 2,
-    flexShrink: 0,
+    borderWidth: 1, borderColor: 'rgba(255,215,0,0.3)',
+    alignItems: 'center', justifyContent: 'center',
+    marginTop: 2, flexShrink: 0,
   },
-  bubble: {
-    maxWidth: '82%',
-    borderRadius: Radius.lg,
-    padding: Spacing.md,
-    borderWidth: 1,
-  },
-  bubbleUser: {
-    backgroundColor: Colors.primary,
-    borderColor: Colors.primary,
-    borderBottomRightRadius: 4,
-  },
-  bubbleAI: {
-    backgroundColor: Colors.surfaceElevated,
-    borderColor: Colors.surfaceBorder,
-    borderBottomLeftRadius: 4,
-  },
-  bubbleText: {
-    fontSize: FontSize.sm,
-    color: Colors.textPrimary,
-    lineHeight: 22,
-  },
+  bubble: { maxWidth: '82%', borderRadius: Radius.lg, padding: Spacing.md, borderWidth: 1 },
+  bubbleUser: { backgroundColor: Colors.primary, borderColor: Colors.primary, borderBottomRightRadius: 4 },
+  bubbleAI: { backgroundColor: Colors.surfaceElevated, borderColor: Colors.surfaceBorder, borderBottomLeftRadius: 4 },
+  bubbleText: { fontSize: FontSize.sm, color: Colors.textPrimary, lineHeight: 22 },
   bubbleTextUser: { color: Colors.textInverse, fontWeight: FontWeight.medium },
   cursor: { color: Colors.primary, fontSize: FontSize.sm },
-
   loadingBubble: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   loadingText: { fontSize: FontSize.sm, color: Colors.textMuted },
 
   // Input
   inputArea: {
-    borderTopWidth: 1,
-    borderTopColor: Colors.surfaceBorder,
-    paddingHorizontal: Spacing.md,
-    paddingTop: Spacing.sm,
-    paddingBottom: Spacing.md,
-    backgroundColor: Colors.background,
-    gap: 8,
+    borderTopWidth: 1, borderTopColor: Colors.surfaceBorder,
+    paddingHorizontal: Spacing.md, paddingTop: Spacing.sm, paddingBottom: Spacing.md,
+    backgroundColor: Colors.background, gap: 8,
   },
   activeModeBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    alignSelf: 'flex-start',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.surfaceBorder,
+    flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start',
+    paddingHorizontal: 10, paddingVertical: 4,
+    borderRadius: Radius.full, backgroundColor: Colors.surface,
+    borderWidth: 1, borderColor: Colors.surfaceBorder,
+    maxWidth: '90%',
   },
   activeModeText: { fontSize: 11, fontWeight: FontWeight.semibold },
-  inputRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 8,
-  },
+  inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
   input: {
-    flex: 1,
-    backgroundColor: Colors.inputBg,
-    borderWidth: 1,
-    borderColor: Colors.inputBorder,
-    borderRadius: Radius.xl,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 12,
-    fontSize: FontSize.sm,
-    color: Colors.textPrimary,
-    maxHeight: 140,
-    lineHeight: 20,
+    flex: 1, backgroundColor: Colors.inputBg,
+    borderWidth: 1, borderColor: Colors.inputBorder,
+    borderRadius: Radius.xl, paddingHorizontal: Spacing.md, paddingVertical: 12,
+    fontSize: FontSize.sm, color: Colors.textPrimary, maxHeight: 140, lineHeight: 20,
   },
   sendBtn: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: Colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 48, height: 48, borderRadius: 24,
+    backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center',
   },
   sendBtnDisabled: { backgroundColor: Colors.textMuted },
 
-  // Modal
+  // Projects sheet
+  sheetBackdrop: { flex: 1, backgroundColor: Colors.overlay, justifyContent: 'flex-end' },
+  projectsSheet: {
+    backgroundColor: Colors.surfaceElevated,
+    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    borderWidth: 1, borderColor: Colors.surfaceBorder,
+    padding: Spacing.lg, paddingBottom: 40,
+    maxHeight: '85%',
+    gap: Spacing.md,
+  },
+  sheetHandle: {
+    width: 40, height: 4, borderRadius: 2,
+    backgroundColor: Colors.surfaceBorder, alignSelf: 'center', marginBottom: 4,
+  },
+  projectsHeader: {
+    flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between',
+  },
+  sheetTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  sheetSub: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 2 },
+  newProjectBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: Colors.primary, borderRadius: Radius.full,
+    paddingHorizontal: 14, paddingVertical: 9,
+  },
+  newProjectBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textInverse },
+
+  projectsLoading: { alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.xl },
+  projectsLoadingText: { fontSize: FontSize.sm, color: Colors.textMuted },
+  projectsEmpty: { alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.xl },
+  projectsEmptyTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textSecondary },
+  projectsEmptyDesc: { fontSize: FontSize.sm, color: Colors.textMuted, textAlign: 'center', lineHeight: 20 },
+
+  // Project item
+  projectItem: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.surfaceBorder,
+    padding: Spacing.md,
+  },
+  projectModeIcon: {
+    width: 40, height: 40, borderRadius: 20,
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+  projectTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  projectDesc: { fontSize: FontSize.xs, color: Colors.textSecondary, lineHeight: 17 },
+  projectMeta: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 },
+  projectModePill: {
+    borderWidth: 1, borderRadius: Radius.full,
+    paddingHorizontal: 7, paddingVertical: 2,
+  },
+  projectModeText: { fontSize: 10, fontWeight: FontWeight.bold },
+  projectMetaText: { fontSize: FontSize.xs, color: Colors.textMuted },
+  projectActions: { flexDirection: 'row', gap: 6 },
+  projectActionBtn: {
+    width: 30, height: 30, borderRadius: 15,
+    backgroundColor: Colors.surfaceElevated, borderWidth: 1, borderColor: Colors.surfaceBorder,
+    alignItems: 'center', justifyContent: 'center',
+  },
+
+  // Modals
   modalBackdrop: {
-    flex: 1,
-    backgroundColor: Colors.overlay,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: Spacing.lg,
+    flex: 1, backgroundColor: Colors.overlay,
+    alignItems: 'center', justifyContent: 'center', paddingHorizontal: Spacing.lg,
   },
   modalCard: {
-    width: '100%',
-    backgroundColor: Colors.surfaceElevated,
-    borderRadius: Radius.xl,
-    borderWidth: 1,
-    borderColor: Colors.surfaceBorder,
-    padding: Spacing.lg,
-    alignItems: 'center',
-    gap: Spacing.md,
-    ...Shadow.card,
+    width: '100%', backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radius.xl, borderWidth: 1, borderColor: Colors.surfaceBorder,
+    padding: Spacing.lg, alignItems: 'center', gap: Spacing.md, ...Shadow.card,
   },
   modalIconWrap: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: Colors.warningDim,
-    borderWidth: 1,
-    borderColor: 'rgba(245,158,11,0.3)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 52, height: 52, borderRadius: 26,
+    backgroundColor: Colors.primaryGlow,
+    borderWidth: 1, borderColor: 'rgba(255,215,0,0.3)',
+    alignItems: 'center', justifyContent: 'center',
   },
   modalTitle: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.textPrimary, textAlign: 'center' },
   modalBody: { fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center', lineHeight: 20 },
+  saveInput: {
+    width: '100%', backgroundColor: Colors.inputBg,
+    borderWidth: 1, borderColor: Colors.inputBorder,
+    borderRadius: Radius.lg, paddingHorizontal: Spacing.md, paddingVertical: 13,
+    fontSize: FontSize.base, color: Colors.textPrimary,
+  },
+  saveFirstBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: Radius.full,
+    backgroundColor: Colors.primaryGlow,
+    borderWidth: 1, borderColor: 'rgba(255,215,0,0.25)',
+  },
+  saveFirstBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.primary },
   modalBtns: { flexDirection: 'row', gap: Spacing.sm, width: '100%', marginTop: Spacing.sm },
   modalBtn: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
