@@ -71,6 +71,14 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="builder"
+        options={{
+          tabBarIcon: ({ color, focused }) => (
+            <TabIcon name="developer-mode" color={color} focused={focused} label="Builder" />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="admin"
         options={{
           tabBarIcon: ({ color, focused }) => (
