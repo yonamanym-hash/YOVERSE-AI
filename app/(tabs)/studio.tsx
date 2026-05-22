@@ -3,7 +3,7 @@ import React, { useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, Pressable,
   TextInput, KeyboardAvoidingView, Platform, ActivityIndicator,
-  Alert,
+  Alert, Animated, Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
@@ -12,13 +12,27 @@ import * as ImagePicker from 'expo-image-picker';
 import { Colors, Spacing, FontSize, FontWeight, Radius, Shadow } from '@/constants/theme';
 import { analyzePhotoWithAI } from '@/services/studioService';
 
+const { width } = Dimensions.get('window');
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-type StudioTab = 'advisor' | 'fashion' | 'poses';
+type StudioTab = 'advisor' | 'video' | 'fashion' | 'poses';
 
 interface AIFeedback {
   text: string;
   category: 'editing' | 'style' | 'pose' | 'general';
+}
+
+interface WorkspaceItem {
+  id: string;
+  type: 'video' | 'image' | 'pose' | 'fashion';
+  title: string;
+  description: string;
+  timestamp: Date;
+  status: 'completed' | 'processing' | 'queued';
+  thumbnail?: string;
+  duration?: string;
+  resolution?: string;
 }
 
 // ─── Data ────────────────────────────────────────────────────────────────────
@@ -144,10 +158,33 @@ const EDITING_QUICK_TIPS = [
   { icon: '🌟', title: 'Dehaze', tip: 'For dark, dramatic edits — lift dehaze slightly. It adds a rich, contrasty matte feel.' },
 ];
 
+const VIDEO_DURATIONS = [
+  { label: '5s', value: 5 },
+  { label: '30s', value: 30 },
+  { label: '1m', value: 60 },
+  { label: '3m', value: 180 },
+  { label: '5m', value: 300 },
+  { label: '10m', value: 600 },
+];
+
+const ASPECT_RATIOS = [
+  { label: '16:9', value: '16:9', icon: 'crop-landscape', desc: 'Landscape' },
+  { label: '9:16', value: '9:16', icon: 'crop-portrait', desc: 'Portrait' },
+  { label: '1:1', value: '1:1', icon: 'crop-square', desc: 'Square' },
+  { label: '4:3', value: '4:3', icon: 'crop-din', desc: 'Standard' },
+];
+
+const VIDEO_STYLES = [
+  { label: 'Cinematic', emoji: '🎬', desc: 'Film-like quality with dramatic lighting' },
+  { label: 'Documentary', emoji: '📽️', desc: 'Natural and authentic storytelling' },
+  { label: 'Social', emoji: '📱', desc: 'Optimized for TikTok & Reels' },
+  { label: 'Commercial', emoji: '💼', desc: 'Professional brand content' },
+];
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function StudioScreen() {
-  const [activeTab, setActiveTab] = useState<StudioTab>('advisor');
+  const [activeTab, setActiveTab] = useState<StudioTab>('video');
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [imageBase64, setImageBase64] = useState<string | null>(null);
   const [customPrompt, setCustomPrompt] = useState('');
@@ -155,6 +192,36 @@ export default function StudioScreen() {
   const [feedback, setFeedback] = useState<AIFeedback | null>(null);
   const [expandedFashion, setExpandedFashion] = useState<number | null>(0);
   const [expandedPose, setExpandedPose] = useState<number | null>(null);
+
+  // Video Generation State
+  const [videoPrompt, setVideoPrompt] = useState('');
+  const [selectedDuration, setSelectedDuration] = useState(30);
+  const [selectedAspect, setSelectedAspect] = useState('16:9');
+  const [selectedStyle, setSelectedStyle] = useState('Cinematic');
+  const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
+  const [generationProgress, setGenerationProgress] = useState(0);
+
+  // Workspace History (chronological stacking - only add, no delete)
+  const [workspaceItems, setWorkspaceItems] = useState<WorkspaceItem[]>([
+    {
+      id: '1',
+      type: 'video',
+      title: 'Brand Introduction',
+      description: 'AI-generated brand intro video with cinematic style',
+      timestamp: new Date(Date.now() - 3600000),
+      status: 'completed',
+      duration: '30s',
+      resolution: '16:9',
+    },
+    {
+      id: '2',
+      type: 'image',
+      title: 'Fashion Pose Analysis',
+      description: 'Power Walk pose feedback from AI Advisor',
+      timestamp: new Date(Date.now() - 7200000),
+      status: 'completed',
+    },
+  ]);
 
   const pickImage = useCallback(async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -201,6 +268,17 @@ export default function StudioScreen() {
       const prompt = customPrompt.trim() || 'Analyze this photo and give me feedback on the style, pose, editing, and overall look. Be specific and actionable.';
       const result = await analyzePhotoWithAI(imageBase64, prompt);
       setFeedback({ text: result, category: 'general' });
+      
+      // Add to workspace history (chronological stacking)
+      const newItem: WorkspaceItem = {
+        id: Date.now().toString(),
+        type: 'image',
+        title: 'Photo Analysis',
+        description: customPrompt.trim() || 'AI style and pose feedback',
+        timestamp: new Date(),
+        status: 'completed',
+      };
+      setWorkspaceItems(prev => [newItem, ...prev]);
     } catch {
       setFeedback({ text: 'Could not analyze the photo. Check your connection and try again.', category: 'general' });
     } finally {
@@ -215,24 +293,87 @@ export default function StudioScreen() {
     setCustomPrompt('');
   };
 
+  const generateVideo = useCallback(async () => {
+    if (!videoPrompt.trim()) {
+      Alert.alert('Enter a prompt', 'Please describe the video you want to generate.');
+      return;
+    }
+    
+    setIsGeneratingVideo(true);
+    setGenerationProgress(0);
+    
+    // Simulate video generation progress
+    const interval = setInterval(() => {
+      setGenerationProgress(prev => {
+        if (prev >= 100) {
+          clearInterval(interval);
+          return 100;
+        }
+        return prev + Math.random() * 15;
+      });
+    }, 500);
+
+    // Simulate generation time based on duration
+    const genTime = Math.min(selectedDuration / 10, 8) * 1000;
+    
+    setTimeout(() => {
+      clearInterval(interval);
+      setGenerationProgress(100);
+      
+      // Add to workspace history (chronological stacking - only add, no delete)
+      const newItem: WorkspaceItem = {
+        id: Date.now().toString(),
+        type: 'video',
+        title: videoPrompt.slice(0, 40) + (videoPrompt.length > 40 ? '...' : ''),
+        description: `${selectedStyle} style, ${selectedAspect} aspect ratio`,
+        timestamp: new Date(),
+        status: 'completed',
+        duration: VIDEO_DURATIONS.find(d => d.value === selectedDuration)?.label,
+        resolution: selectedAspect,
+      };
+      setWorkspaceItems(prev => [newItem, ...prev]);
+      
+      setTimeout(() => {
+        setIsGeneratingVideo(false);
+        setGenerationProgress(0);
+        setVideoPrompt('');
+        Alert.alert('Video Generated', 'Your AI video has been added to the workspace.');
+      }, 500);
+    }, genTime);
+  }, [videoPrompt, selectedDuration, selectedAspect, selectedStyle]);
+
+  const formatTimestamp = (date: Date) => {
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    
+    if (minutes < 1) return 'Just now';
+    if (minutes < 60) return `${minutes}m ago`;
+    if (hours < 24) return `${hours}h ago`;
+    return date.toLocaleDateString();
+  };
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
         <View>
           <Text style={styles.headerTitle}>Studio</Text>
-          <Text style={styles.headerSub}>Style · Poses · AI Advisor</Text>
+          <Text style={styles.headerSub}>Video · Style · Poses · AI</Text>
         </View>
         <View style={styles.headerBadge}>
+          <View style={styles.headerBadgePulse} />
           <MaterialIcons name="auto-awesome" size={14} color={Colors.primary} />
-          <Text style={styles.headerBadgeText}>AI Powered</Text>
+          <Text style={styles.headerBadgeText}>AI Ecosystem</Text>
         </View>
       </View>
 
       {/* Tab Bar */}
       <View style={styles.tabBar}>
         {([
-          { key: 'advisor', label: 'AI Advisor', icon: 'camera-alt' },
+          { key: 'video', label: 'Video', icon: 'videocam' },
+          { key: 'advisor', label: 'Advisor', icon: 'camera-alt' },
           { key: 'fashion', label: 'Fashion', icon: 'style' },
           { key: 'poses', label: 'Poses', icon: 'accessibility-new' },
         ] as { key: StudioTab; label: string; icon: any }[]).map((t) => (
@@ -262,6 +403,261 @@ export default function StudioScreen() {
           contentContainerStyle={styles.content}
           keyboardShouldPersistTaps="handled"
         >
+          {/* ── VIDEO TAB ── */}
+          {activeTab === 'video' && (
+            <View style={styles.tabContent}>
+              {/* Video Hero */}
+              <View style={styles.videoHero}>
+                <View style={styles.videoHeroGradient}>
+                  <View style={styles.videoHeroIcon}>
+                    <MaterialIcons name="videocam" size={32} color={Colors.primary} />
+                  </View>
+                  <Text style={styles.videoHeroTag}>AI VIDEO GENERATOR</Text>
+                  <Text style={styles.videoHeroTitle}>Create stunning videos{'\n'}with AI power</Text>
+                  <View style={styles.videoHeroStats}>
+                    <View style={styles.videoHeroStat}>
+                      <Text style={styles.videoHeroStatNum}>{workspaceItems.filter(i => i.type === 'video').length}</Text>
+                      <Text style={styles.videoHeroStatLabel}>Videos</Text>
+                    </View>
+                    <View style={styles.videoHeroStatDivider} />
+                    <View style={styles.videoHeroStat}>
+                      <Text style={styles.videoHeroStatNum}>10m</Text>
+                      <Text style={styles.videoHeroStatLabel}>Max Length</Text>
+                    </View>
+                    <View style={styles.videoHeroStatDivider} />
+                    <View style={styles.videoHeroStat}>
+                      <Text style={styles.videoHeroStatNum}>4K</Text>
+                      <Text style={styles.videoHeroStatLabel}>Quality</Text>
+                    </View>
+                  </View>
+                </View>
+              </View>
+
+              {/* Video Prompt Input */}
+              <View style={styles.videoInputCard}>
+                <View style={styles.videoInputHeader}>
+                  <MaterialIcons name="edit" size={18} color={Colors.primary} />
+                  <Text style={styles.videoInputTitle}>Describe Your Video</Text>
+                </View>
+                <TextInput
+                  style={styles.videoPromptInput}
+                  value={videoPrompt}
+                  onChangeText={setVideoPrompt}
+                  placeholder="A cinematic drone shot over a golden wheat field at sunset, with dramatic lighting and slow motion..."
+                  placeholderTextColor={Colors.textMuted}
+                  multiline
+                  maxLength={500}
+                />
+                <Text style={styles.videoPromptCount}>{videoPrompt.length}/500</Text>
+              </View>
+
+              {/* Duration Selection */}
+              <View style={styles.settingsCard}>
+                <View style={styles.settingsHeader}>
+                  <MaterialIcons name="timer" size={18} color={Colors.primary} />
+                  <Text style={styles.settingsTitle}>Duration</Text>
+                </View>
+                <View style={styles.durationRow}>
+                  {VIDEO_DURATIONS.map((d) => (
+                    <Pressable
+                      key={d.value}
+                      onPress={() => setSelectedDuration(d.value)}
+                      style={[
+                        styles.durationChip,
+                        selectedDuration === d.value && styles.durationChipActive,
+                      ]}
+                    >
+                      <Text style={[
+                        styles.durationChipText,
+                        selectedDuration === d.value && styles.durationChipTextActive,
+                      ]}>
+                        {d.label}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+
+              {/* Aspect Ratio Selection */}
+              <View style={styles.settingsCard}>
+                <View style={styles.settingsHeader}>
+                  <MaterialIcons name="aspect-ratio" size={18} color={Colors.primary} />
+                  <Text style={styles.settingsTitle}>Aspect Ratio</Text>
+                </View>
+                <View style={styles.aspectRow}>
+                  {ASPECT_RATIOS.map((a) => (
+                    <Pressable
+                      key={a.value}
+                      onPress={() => setSelectedAspect(a.value)}
+                      style={[
+                        styles.aspectCard,
+                        selectedAspect === a.value && styles.aspectCardActive,
+                      ]}
+                    >
+                      <MaterialIcons
+                        name={a.icon as any}
+                        size={24}
+                        color={selectedAspect === a.value ? Colors.primary : Colors.textMuted}
+                      />
+                      <Text style={[
+                        styles.aspectLabel,
+                        selectedAspect === a.value && styles.aspectLabelActive,
+                      ]}>
+                        {a.label}
+                      </Text>
+                      <Text style={styles.aspectDesc}>{a.desc}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+
+              {/* Video Style Selection */}
+              <View style={styles.settingsCard}>
+                <View style={styles.settingsHeader}>
+                  <MaterialIcons name="palette" size={18} color={Colors.primary} />
+                  <Text style={styles.settingsTitle}>Style</Text>
+                </View>
+                <View style={styles.styleRow}>
+                  {VIDEO_STYLES.map((s) => (
+                    <Pressable
+                      key={s.label}
+                      onPress={() => setSelectedStyle(s.label)}
+                      style={[
+                        styles.styleCard,
+                        selectedStyle === s.label && styles.styleCardActive,
+                      ]}
+                    >
+                      <Text style={styles.styleEmoji}>{s.emoji}</Text>
+                      <Text style={[
+                        styles.styleLabel,
+                        selectedStyle === s.label && styles.styleLabelActive,
+                      ]}>
+                        {s.label}
+                      </Text>
+                      <Text style={styles.styleDesc}>{s.desc}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+
+              {/* Generate Button */}
+              <Pressable
+                style={({ pressed }) => [
+                  styles.generateBtn,
+                  isGeneratingVideo && styles.generateBtnDisabled,
+                  pressed && !isGeneratingVideo && { transform: [{ scale: 0.98 }] },
+                ]}
+                onPress={generateVideo}
+                disabled={isGeneratingVideo}
+              >
+                {isGeneratingVideo ? (
+                  <View style={styles.generateBtnContent}>
+                    <ActivityIndicator size="small" color={Colors.textInverse} />
+                    <Text style={styles.generateBtnText}>
+                      Generating... {Math.round(generationProgress)}%
+                    </Text>
+                  </View>
+                ) : (
+                  <View style={styles.generateBtnContent}>
+                    <MaterialIcons name="auto-awesome" size={20} color={Colors.textInverse} />
+                    <Text style={styles.generateBtnText}>Generate Video</Text>
+                  </View>
+                )}
+                {isGeneratingVideo && (
+                  <View style={styles.progressBar}>
+                    <View style={[styles.progressFill, { width: `${generationProgress}%` }]} />
+                  </View>
+                )}
+              </Pressable>
+
+              {/* Processing Timeline */}
+              {isGeneratingVideo && (
+                <View style={styles.timelineCard}>
+                  <Text style={styles.timelineTitle}>Processing Timeline</Text>
+                  <View style={styles.timelineSteps}>
+                    {[
+                      { label: 'Analyzing prompt', done: generationProgress > 10 },
+                      { label: 'Generating frames', done: generationProgress > 40 },
+                      { label: 'Applying style', done: generationProgress > 70 },
+                      { label: 'Rendering video', done: generationProgress > 90 },
+                    ].map((step, i) => (
+                      <View key={i} style={styles.timelineStep}>
+                        <View style={[styles.timelineStepDot, step.done && styles.timelineStepDotDone]}>
+                          {step.done && <MaterialIcons name="check" size={12} color={Colors.textInverse} />}
+                        </View>
+                        <Text style={[styles.timelineStepText, step.done && styles.timelineStepTextDone]}>
+                          {step.label}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              )}
+
+              {/* Workspace History Section */}
+              <View style={styles.workspaceSection}>
+                <View style={styles.workspaceHeader}>
+                  <MaterialIcons name="history" size={18} color={Colors.primary} />
+                  <Text style={styles.workspaceTitle}>Workspace History</Text>
+                  <View style={styles.workspaceBadge}>
+                    <Text style={styles.workspaceBadgeText}>{workspaceItems.length} items</Text>
+                  </View>
+                </View>
+                <Text style={styles.workspaceSub}>
+                  All your generated content stacks here chronologically
+                </Text>
+                
+                {workspaceItems.map((item) => (
+                  <View key={item.id} style={styles.workspaceItem}>
+                    <View style={[
+                      styles.workspaceItemIcon,
+                      item.type === 'video' && styles.workspaceItemIconVideo,
+                    ]}>
+                      <MaterialIcons
+                        name={item.type === 'video' ? 'videocam' : item.type === 'image' ? 'image' : 'style'}
+                        size={20}
+                        color={item.type === 'video' ? Colors.info : Colors.primary}
+                      />
+                    </View>
+                    <View style={styles.workspaceItemContent}>
+                      <Text style={styles.workspaceItemTitle}>{item.title}</Text>
+                      <Text style={styles.workspaceItemDesc}>{item.description}</Text>
+                      <View style={styles.workspaceItemMeta}>
+                        <Text style={styles.workspaceItemTime}>{formatTimestamp(item.timestamp)}</Text>
+                        {item.duration && (
+                          <View style={styles.workspaceItemTag}>
+                            <Text style={styles.workspaceItemTagText}>{item.duration}</Text>
+                          </View>
+                        )}
+                        {item.resolution && (
+                          <View style={styles.workspaceItemTag}>
+                            <Text style={styles.workspaceItemTagText}>{item.resolution}</Text>
+                          </View>
+                        )}
+                        <View style={[
+                          styles.workspaceItemStatus,
+                          item.status === 'completed' && styles.workspaceItemStatusDone,
+                        ]}>
+                          <MaterialIcons
+                            name={item.status === 'completed' ? 'check-circle' : 'hourglass-empty'}
+                            size={12}
+                            color={item.status === 'completed' ? Colors.success : Colors.warning}
+                          />
+                          <Text style={[
+                            styles.workspaceItemStatusText,
+                            item.status === 'completed' && styles.workspaceItemStatusTextDone,
+                          ]}>
+                            {item.status}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            </View>
+          )}
+
           {/* ── AI ADVISOR TAB ── */}
           {activeTab === 'advisor' && (
             <View style={styles.tabContent}>
@@ -419,7 +815,7 @@ export default function StudioScreen() {
           {activeTab === 'fashion' && (
             <View style={styles.tabContent}>
               <Text style={styles.sectionIntro}>
-                Yonas's personal style guide — Modern Luxury Edition. These aren't just outfits. They're your brand.
+                Yonas&apos;s personal style guide — Modern Luxury Edition. These aren&apos;t just outfits. They&apos;re your brand.
               </Text>
               {FASHION_STYLES.map((style, i) => {
                 const expanded = expandedFashion === i;
@@ -462,7 +858,7 @@ export default function StudioScreen() {
 
               {/* Color Palette */}
               <View style={styles.paletteCard}>
-                <Text style={styles.paletteTitle}>🎨 Your Signature Color Palette</Text>
+                <Text style={styles.paletteTitle}>Your Signature Color Palette</Text>
                 <Text style={styles.paletteSub}>Build your wardrobe around these — they photograph well and scream "Modern Luxury".</Text>
                 <View style={styles.paletteRow}>
                   {[
@@ -487,7 +883,7 @@ export default function StudioScreen() {
           {activeTab === 'poses' && (
             <View style={styles.tabContent}>
               <Text style={styles.sectionIntro}>
-                Six signature poses for every setting. Master these and you'll never have a bad photo again.
+                Six signature poses for every setting. Master these and you&apos;ll never have a bad photo again.
               </Text>
               {POSE_LIBRARY.map((pose, i) => {
                 const expanded = expandedPose === i;
@@ -535,7 +931,7 @@ export default function StudioScreen() {
 
               {/* Lighting Tips */}
               <View style={styles.lightingCard}>
-                <Text style={styles.lightingTitle}>💡 Lighting Cheat Sheet</Text>
+                <Text style={styles.lightingTitle}>Lighting Cheat Sheet</Text>
                 <View style={styles.lightingItems}>
                   {[
                     { icon: '🌅', title: 'Golden Hour', body: '30 min after sunrise / before sunset. Warm, cinematic, flattering.' },
@@ -584,10 +980,20 @@ const styles = StyleSheet.create({
     gap: 5,
     backgroundColor: Colors.primaryGlow,
     borderWidth: 1,
-    borderColor: 'rgba(255,215,0,0.2)',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    borderColor: 'rgba(255,215,0,0.3)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     borderRadius: Radius.full,
+    position: 'relative',
+  },
+  headerBadgePulse: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: Colors.success,
   },
   headerBadgeText: { fontSize: FontSize.xs, fontWeight: FontWeight.bold, color: Colors.primary },
 
@@ -607,13 +1013,323 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 5,
+    gap: 4,
     paddingVertical: 10,
     borderRadius: Radius.md,
   },
-  tabItemActive: { backgroundColor: Colors.primary },
-  tabLabel: { fontSize: 12, fontWeight: FontWeight.semibold, color: Colors.textMuted },
+  tabItemActive: { 
+    backgroundColor: Colors.primary,
+    ...Shadow.gold,
+  },
+  tabLabel: { fontSize: 11, fontWeight: FontWeight.semibold, color: Colors.textMuted },
   tabLabelActive: { color: Colors.textInverse },
+
+  // ── Video Tab Styles ──
+  videoHero: {
+    marginHorizontal: Spacing.md,
+    marginBottom: Spacing.md,
+    borderRadius: Radius.xl,
+    overflow: 'hidden',
+    ...Shadow.card,
+  },
+  videoHeroGradient: {
+    backgroundColor: Colors.surfaceElevated,
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.3)',
+    padding: Spacing.lg,
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  videoHeroIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: Colors.infoDim,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: Spacing.xs,
+  },
+  videoHeroTag: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.bold,
+    color: Colors.info,
+    letterSpacing: 2,
+  },
+  videoHeroTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+    textAlign: 'center',
+    lineHeight: 26,
+  },
+  videoHeroStats: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    marginTop: Spacing.sm,
+  },
+  videoHeroStat: { alignItems: 'center' },
+  videoHeroStatNum: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.primary },
+  videoHeroStatLabel: { fontSize: FontSize.xs, color: Colors.textMuted },
+  videoHeroStatDivider: { width: 1, height: 30, backgroundColor: Colors.surfaceBorder },
+
+  videoInputCard: {
+    marginHorizontal: Spacing.md,
+    marginBottom: Spacing.md,
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radius.xl,
+    borderWidth: 1,
+    borderColor: Colors.surfaceBorder,
+    padding: Spacing.md,
+    gap: Spacing.sm,
+  },
+  videoInputHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  videoInputTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  videoPromptInput: {
+    backgroundColor: Colors.inputBg,
+    borderWidth: 1,
+    borderColor: Colors.inputBorder,
+    borderRadius: Radius.lg,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 14,
+    fontSize: FontSize.sm,
+    color: Colors.textPrimary,
+    minHeight: 100,
+    textAlignVertical: 'top',
+    lineHeight: 22,
+  },
+  videoPromptCount: {
+    fontSize: FontSize.xs,
+    color: Colors.textMuted,
+    textAlign: 'right',
+  },
+
+  settingsCard: {
+    marginHorizontal: Spacing.md,
+    marginBottom: Spacing.md,
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radius.xl,
+    borderWidth: 1,
+    borderColor: Colors.surfaceBorder,
+    padding: Spacing.md,
+    gap: Spacing.md,
+  },
+  settingsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  settingsTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+
+  durationRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+  },
+  durationChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.inputBg,
+    borderWidth: 1,
+    borderColor: Colors.inputBorder,
+  },
+  durationChipActive: {
+    backgroundColor: Colors.primaryGlow,
+    borderColor: Colors.primary,
+  },
+  durationChipText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textMuted },
+  durationChipTextActive: { color: Colors.primary },
+
+  aspectRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+  },
+  aspectCard: {
+    flex: 1,
+    alignItems: 'center',
+    padding: Spacing.md,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.inputBg,
+    borderWidth: 1,
+    borderColor: Colors.inputBorder,
+    gap: 4,
+  },
+  aspectCardActive: {
+    backgroundColor: Colors.primaryGlow,
+    borderColor: Colors.primary,
+  },
+  aspectLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textMuted },
+  aspectLabelActive: { color: Colors.primary },
+  aspectDesc: { fontSize: 9, color: Colors.textMuted },
+
+  styleRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+  },
+  styleCard: {
+    width: (width - Spacing.md * 2 - Spacing.md - Spacing.sm) / 2,
+    alignItems: 'center',
+    padding: Spacing.md,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.inputBg,
+    borderWidth: 1,
+    borderColor: Colors.inputBorder,
+    gap: 4,
+  },
+  styleCardActive: {
+    backgroundColor: Colors.primaryGlow,
+    borderColor: Colors.primary,
+  },
+  styleEmoji: { fontSize: 24 },
+  styleLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textMuted },
+  styleLabelActive: { color: Colors.primary },
+  styleDesc: { fontSize: 9, color: Colors.textMuted, textAlign: 'center' },
+
+  generateBtn: {
+    marginHorizontal: Spacing.md,
+    marginBottom: Spacing.md,
+    backgroundColor: Colors.primary,
+    borderRadius: Radius.lg,
+    paddingVertical: 16,
+    overflow: 'hidden',
+    ...Shadow.gold,
+  },
+  generateBtnDisabled: {
+    backgroundColor: Colors.info,
+    shadowOpacity: 0,
+  },
+  generateBtnContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+  },
+  generateBtnText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.textInverse },
+  progressBar: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 4,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: Colors.textPrimary,
+  },
+
+  timelineCard: {
+    marginHorizontal: Spacing.md,
+    marginBottom: Spacing.md,
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radius.xl,
+    borderWidth: 1,
+    borderColor: Colors.infoDim,
+    padding: Spacing.md,
+    gap: Spacing.md,
+  },
+  timelineTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  timelineSteps: { gap: Spacing.sm },
+  timelineStep: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  timelineStepDot: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: Colors.inputBg,
+    borderWidth: 1,
+    borderColor: Colors.inputBorder,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  timelineStepDotDone: {
+    backgroundColor: Colors.success,
+    borderColor: Colors.success,
+  },
+  timelineStepText: { fontSize: FontSize.sm, color: Colors.textMuted },
+  timelineStepTextDone: { color: Colors.textPrimary },
+
+  // ── Workspace History ──
+  workspaceSection: {
+    marginHorizontal: Spacing.md,
+    marginTop: Spacing.sm,
+    gap: Spacing.sm,
+  },
+  workspaceHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  workspaceTitle: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.textPrimary, flex: 1 },
+  workspaceBadge: {
+    backgroundColor: Colors.primaryGlow,
+    borderRadius: Radius.full,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  workspaceBadgeText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.primary },
+  workspaceSub: {
+    fontSize: FontSize.xs,
+    color: Colors.textMuted,
+    marginBottom: Spacing.sm,
+  },
+  workspaceItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.md,
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.surfaceBorder,
+    padding: Spacing.md,
+    marginBottom: Spacing.sm,
+  },
+  workspaceItemIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: Colors.primaryGlow,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  workspaceItemIconVideo: {
+    backgroundColor: Colors.infoDim,
+  },
+  workspaceItemContent: { flex: 1, gap: 4 },
+  workspaceItemTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  workspaceItemDesc: { fontSize: FontSize.xs, color: Colors.textSecondary, lineHeight: 18 },
+  workspaceItemMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    marginTop: 4,
+    flexWrap: 'wrap',
+  },
+  workspaceItemTime: { fontSize: 10, color: Colors.textMuted },
+  workspaceItemTag: {
+    backgroundColor: Colors.inputBg,
+    borderRadius: Radius.sm,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  workspaceItemTagText: { fontSize: 9, color: Colors.textMuted, fontWeight: FontWeight.semibold },
+  workspaceItemStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  workspaceItemStatusDone: {},
+  workspaceItemStatusText: { fontSize: 10, color: Colors.warning, textTransform: 'capitalize' },
+  workspaceItemStatusTextDone: { color: Colors.success },
 
   // Studio Hero
   studioHero: {
@@ -669,11 +1385,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.md,
     paddingVertical: 12,
     borderRadius: Radius.lg,
+    ...Shadow.gold,
   },
   uploadBtnSecondary: {
     backgroundColor: Colors.primaryGlow,
     borderWidth: 1.5,
     borderColor: Colors.primary,
+    shadowOpacity: 0,
   },
   uploadBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textInverse },
 
