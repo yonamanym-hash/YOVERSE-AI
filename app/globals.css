@@ -1,0 +1,102 @@
+@import "tailwindcss";
+
+:root {
+  /* Yoverse Core Studio - Obsidian Theme */
+  --background: 240 6% 4%; /* #0B0B0F */
+  --foreground: 210 20% 95%;
+  
+  /* Card & Surface Colors */
+  --card: 240 5% 8%;
+  --card-foreground: 210 20% 95%;
+  --popover: 240 5% 10%;
+  --popover-foreground: 210 20% 95%;
+  
+  /* Primary - Neon Cyan */
+  --primary: 180 100% 50%; /* #00FFFF */
+  --primary-foreground: 240 6% 4%;
+  
+  /* Secondary - Muted Slate */
+  --secondary: 220 10% 18%;
+  --secondary-foreground: 210 20% 85%;
+  
+  /* Muted Colors */
+  --muted: 220 10% 14%;
+  --muted-foreground: 220 10% 55%;
+  
+  /* Accent - Electric Cyan Glow */
+  --accent: 180 90% 45%;
+  --accent-foreground: 240 6% 4%;
+  
+  /* Destructive */
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 210 20% 98%;
+  
+  /* Border & Input */
+  --border: 220 10% 20%;
+  --input: 220 10% 16%;
+  --ring: 180 100% 50%;
+  
+  /* Radius */
+  --radius: 0.75rem;
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+html {
+  background-color: hsl(var(--background));
+}
+
+body {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Custom scrollbar for dark theme */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: hsl(var(--muted));
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground));
+}
+
+/* Neon glow effect utilities */
+.neon-glow {
+  box-shadow: 
+    0 0 5px hsl(var(--primary)),
+    0 0 10px hsl(var(--primary) / 0.5),
+    0 0 20px hsl(var(--primary) / 0.3);
+}
+
+.neon-text {
+  text-shadow: 
+    0 0 5px hsl(var(--primary)),
+    0 0 10px hsl(var(--primary) / 0.5);
+}
+
+/* Code block styling */
+.code-block {
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+}
+
+/* Syntax highlighting colors */
+.token-keyword { color: hsl(280 100% 70%); }
+.token-string { color: hsl(120 60% 60%); }
+.token-function { color: hsl(45 100% 60%); }
+.token-comment { color: hsl(220 10% 45%); }
+.token-variable { color: hsl(var(--primary)); }
