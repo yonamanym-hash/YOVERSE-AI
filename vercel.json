@@ -1,6 +1,5 @@
 {
   "version": 2,
-  "framework": "expo",
-  "buildCommand": "expo export --platform web",
+  "buildCommand": "npx expo export --platform web",
   "outputDirectory": "dist"
 }
